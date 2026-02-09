@@ -1,10 +1,6 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
 /* =========================
    Design Tokens
-========================= */
+/* ========================= */
 @layer base {
   :root {
     --bg: #F8FAFA;
@@ -28,7 +24,7 @@
       'Helvetica Neue', sans-serif;
   }
   
-}
+} */
 
 /* =========================
    Components (PURE CSS)
