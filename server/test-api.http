@@ -1,0 +1,110 @@
+### Test API Endpoints
+
+### Base URL
+@baseUrl = http://localhost:3000
+
+### 1. Create User
+POST {{baseUrl}}/api/users
+Content-Type: application/json
+
+{
+  "user_full_name": "Arjun Mehta",
+  "email": "arjun@example.com",
+  "upi_id": "arjun@paytm",
+  "allowedNotification": ["email", "push"]
+}
+
+### 2. Get All Users
+GET {{baseUrl}}/api/users
+
+### 3. Get User by ID
+GET {{baseUrl}}/api/users/USER_ID_HERE
+
+### 4. Create Trip
+POST {{baseUrl}}/api/trips
+Content-Type: application/json
+
+{
+  "trip_name": "Manali Adventure 2024",
+  "trip_start_date": "2024-10-12",
+  "trip_end_date": "2024-10-20",
+  "category": "Adventure",
+  "members_id": ["USER_ID_1", "USER_ID_2"],
+  "trip_cover_image": "https://example.com/image.jpg"
+}
+
+### 5. Get All Trips
+GET {{baseUrl}}/api/trips
+
+### 6. Get Trip by ID
+GET {{baseUrl}}/api/trips/TRIP_ID_HERE
+
+### 7. Add Member to Trip
+POST {{baseUrl}}/api/trips/TRIP_ID_HERE/members
+Content-Type: application/json
+
+{
+  "user_id": "USER_ID_HERE"
+}
+
+### 8. Create Expense
+POST {{baseUrl}}/api/expenses
+Content-Type: application/json
+
+{
+  "expense_title": "Dinner at Highway Dhaba",
+  "amount": 2450,
+  "category": "Food",
+  "trip_id": "TRIP_ID_HERE",
+  "paid_by_id": "USER_ID_HERE",
+  "split_between": [
+    {
+      "name": "Arjun Mehta",
+      "user_id": "USER_ID_1",
+      "amount": 490
+    },
+    {
+      "name": "Priya Singh",
+      "user_id": "USER_ID_2",
+      "amount": 490
+    }
+  ]
+}
+
+### 9. Get Expenses by Trip
+GET {{baseUrl}}/api/expenses/trip/TRIP_ID_HERE
+
+### 10. Get Expense Summary
+GET {{baseUrl}}/api/expenses/trip/TRIP_ID_HERE/summary
+
+### 11. Calculate Settlement
+POST {{baseUrl}}/api/settlements/trip/TRIP_ID_HERE/calculate
+
+### 12. Get Settlement by Trip
+GET {{baseUrl}}/api/settlements/trip/TRIP_ID_HERE
+
+### 13. Update Settlement Status
+PUT {{baseUrl}}/api/settlements/trip/TRIP_ID_HERE/status
+Content-Type: application/json
+
+{
+  "settlementIndex": 0,
+  "status": "Paid"
+}
+
+### 14. Get or Create Chat
+GET {{baseUrl}}/api/chat/trip/TRIP_ID_HERE
+
+### 15. Add Message (REST)
+POST {{baseUrl}}/api/chat/message
+Content-Type: application/json
+
+{
+  "tripId": "TRIP_ID_HERE",
+  "sender_id": "USER_ID_HERE",
+  "name": "Arjun Mehta",
+  "text": "Hello everyone!"
+}
+
+### 16. Get Chat Messages
+GET {{baseUrl}}/api/chat/trip/TRIP_ID_HERE/messages

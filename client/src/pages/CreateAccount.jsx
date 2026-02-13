@@ -1,10 +1,17 @@
 import React, { useState } from "react";
+import LoadingButton from "../components/LoadingButton";
+import { useApi } from "../hooks/useApi";
+import { userAPI } from "../services/api";
+import { validateEmail, validatePassword, validateName } from "../utils/validation";
+import toast from "react-hot-toast";
 
 const CreateAccount = ({ onLogin }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [errors, setErrors] = useState({});
+  const { execute, loading } = useApi();
 
   const getStrength = (pwd) => {
     if (!pwd) return { label: "None", width: "0%", color: "bg-gray-200" };
@@ -52,7 +59,39 @@ const CreateAccount = ({ onLogin }) => {
             </p>
 
             <form
-              onSubmit={(e) => e.preventDefault()}
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setErrors({});
+                
+                // Validate all fields
+                const nameValidation = validateName(fullName);
+                const emailValidation = validateEmail(email);
+                const passwordValidation = validatePassword(password);
+                
+                if (!nameValidation.valid || !emailValidation.valid || !passwordValidation.valid) {
+                  const newErrors = {};
+                  if (!nameValidation.valid) newErrors.fullName = nameValidation.message;
+                  if (!emailValidation.valid) newErrors.email = emailValidation.message;
+                  if (!passwordValidation.valid) newErrors.password = passwordValidation.message;
+                  setErrors(newErrors);
+                  return;
+                }
+
+                await execute(
+                  () => userAPI.create({
+                    user_full_name: fullName.trim(),
+                    email: email.trim().toLowerCase(),
+                    allowedNotification: ["email"],
+                  }),
+                  {
+                    successMessage: "Account created successfully! Check your email for welcome message.",
+                    errorMessage: "Failed to create account",
+                    onSuccess: () => {
+                      if (onLogin) onLogin();
+                    },
+                  }
+                );
+              }}
               className="space-y-4"
             >
               <div>
@@ -63,10 +102,19 @@ const CreateAccount = ({ onLogin }) => {
                   id="fullName"
                   type="text"
                   value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
+                  onChange={(e) => {
+                    setFullName(e.target.value);
+                    if (errors.fullName) setErrors({ ...errors, fullName: null });
+                  }}
                   placeholder="Enter your full name"
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#14D38E] focus:border-transparent"
+                  className={`w-full px-4 py-3 rounded-xl border text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#14D38E] focus:border-transparent ${
+                    errors.fullName ? "border-red-500" : "border-gray-200"
+                  }`}
+                  required
                 />
+                {errors.fullName && (
+                  <p className="mt-1 text-sm text-red-500">{errors.fullName}</p>
+                )}
               </div>
 
               <div>
@@ -77,10 +125,19 @@ const CreateAccount = ({ onLogin }) => {
                   id="email"
                   type="email"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (errors.email) setErrors({ ...errors, email: null });
+                  }}
                   placeholder="name@email.com"
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#14D38E] focus:border-transparent"
+                  className={`w-full px-4 py-3 rounded-xl border text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#14D38E] focus:border-transparent ${
+                    errors.email ? "border-red-500" : "border-gray-200"
+                  }`}
+                  required
                 />
+                {errors.email && (
+                  <p className="mt-1 text-sm text-red-500">{errors.email}</p>
+                )}
               </div>
 
               <div>
@@ -92,9 +149,15 @@ const CreateAccount = ({ onLogin }) => {
                     id="password"
                     type={showPassword ? "text" : "password"}
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (errors.password) setErrors({ ...errors, password: null });
+                    }}
                     placeholder="Create a strong password"
-                    className="w-full px-4 py-3 pr-12 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#14D38E] focus:border-transparent"
+                    className={`w-full px-4 py-3 pr-12 rounded-xl border text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#14D38E] focus:border-transparent ${
+                      errors.password ? "border-red-500" : "border-gray-200"
+                    }`}
+                    required
                   />
                   <button
                     type="button"
@@ -125,18 +188,23 @@ const CreateAccount = ({ onLogin }) => {
                       style={{ width: strength.width }}
                     />
                   </div>
+                  {errors.password && (
+                    <p className="mt-1 text-sm text-red-500">{errors.password}</p>
+                  )}
                 </div>
               </div>
 
-              <button
+              <LoadingButton
                 type="submit"
-                className="w-full mt-2 py-3.5 rounded-xl bg-[#14D38E] text-white font-bold flex items-center justify-center gap-2 hover:bg-[#11B97C] transition-colors"
+                loading={loading}
+                className="w-full mt-2 py-3.5"
+                variant="primary"
               >
                 Sign Up
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
                 </svg>
-              </button>
+              </LoadingButton>
             </form>
 
             <p className="text-center text-sm text-gray-500 mt-5">

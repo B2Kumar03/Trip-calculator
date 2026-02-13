@@ -137,9 +137,6 @@ function TripDetailsRoute() {
       onOpenProfile={() => navigate(ROUTES.PROFILE)}
       onOpenNotifications={() => navigate(ROUTES.NOTIFICATIONS)}
       onOpenAdminControls={() => navigate(pathTo(ROUTES.TRIP_ADMIN_CONTROLS, { tripId }), { state: { trip } })}
-      tripName={trip?.tripName}
-      tripDates={trip?.tripDates}
-      location={trip?.location}
     />
   )
 }

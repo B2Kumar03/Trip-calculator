@@ -1,14 +1,43 @@
 import React, { useState } from "react";
+import LoadingButton from "../components/LoadingButton";
+import { useApi } from "../hooks/useApi";
+import { userAPI } from "../services/api";
+import { validateEmail, validatePassword } from "../utils/validation";
 
 const Login = ({ onSignUp, onLoginSuccess }) => {
   const [showPassword, setShowPassword] = useState(false);
-  const [userId, setUserId] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [errors, setErrors] = useState({});
+  const { execute, loading } = useApi();
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    // Bypass auth for now: redirect to Dashboard on Login click
-    if (onLoginSuccess) onLoginSuccess();
+    setErrors({});
+    
+    const emailValidation = validateEmail(email);
+    const passwordValidation = validatePassword(password);
+    
+    if (!emailValidation.valid || !passwordValidation.valid) {
+      const newErrors = {};
+      if (!emailValidation.valid) newErrors.email = emailValidation.message;
+      if (!passwordValidation.valid) newErrors.password = passwordValidation.message;
+      setErrors(newErrors);
+      return;
+    }
+
+    await execute(
+      () => userAPI.getByEmail(email.trim().toLowerCase()),
+      {
+        successMessage: "Login successful!",
+        errorMessage: "Invalid email or password",
+        onSuccess: (data) => {
+          // Store user data
+          localStorage.setItem("user", JSON.stringify(data.data));
+          if (onLoginSuccess) onLoginSuccess();
+        },
+      }
+    );
   };
 
   return (
@@ -54,13 +83,22 @@ const Login = ({ onSignUp, onLoginSuccess }) => {
                   User ID / Email
                 </label>
                 <input
-                  id="userId"
-                  type="text"
-                  value={userId}
-                  onChange={(e) => setUserId(e.target.value)}
-                  placeholder="Enter your user ID"
-                  className="w-full px-4 py-3 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#14D38E] focus:border-transparent"
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (errors.email) setErrors({ ...errors, email: null });
+                  }}
+                  placeholder="Enter your email"
+                  className={`w-full px-4 py-3 rounded-xl border text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#14D38E] focus:border-transparent ${
+                    errors.email ? "border-red-500" : "border-gray-200"
+                  }`}
+                  required
                 />
+                {errors.email && (
+                  <p className="mt-1 text-sm text-red-500">{errors.email}</p>
+                )}
               </div>
 
               <div>
@@ -77,10 +115,19 @@ const Login = ({ onSignUp, onLoginSuccess }) => {
                     id="password"
                     type={showPassword ? "text" : "password"}
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (errors.password) setErrors({ ...errors, password: null });
+                    }}
                     placeholder="Enter your password"
-                    className="w-full px-4 py-3 pr-12 rounded-xl border border-gray-200 text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#14D38E] focus:border-transparent"
+                    className={`w-full px-4 py-3 pr-12 rounded-xl border text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-[#14D38E] focus:border-transparent ${
+                      errors.password ? "border-red-500" : "border-gray-200"
+                    }`}
+                    required
                   />
+                  {errors.password && (
+                    <p className="mt-1 text-sm text-red-500">{errors.password}</p>
+                  )}
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
@@ -101,15 +148,17 @@ const Login = ({ onSignUp, onLoginSuccess }) => {
                 </div>
               </div>
 
-              <button
+              <LoadingButton
                 type="submit"
-                className="w-full mt-2 py-3.5 rounded-xl bg-[#14D38E] text-white font-bold flex items-center justify-center gap-2 hover:bg-[#11B97C] transition-colors"
+                loading={loading}
+                className="w-full mt-2 py-3.5"
+                variant="primary"
               >
                 Login
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7l5 5m0 0l-5 5m5-5H6" />
                 </svg>
-              </button>
+              </LoadingButton>
             </form>
 
             {/* Invited by Admin notice */}

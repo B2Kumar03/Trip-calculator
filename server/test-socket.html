@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.io Chat Test</title>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .container {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+        }
+        input, textarea, button {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            box-sizing: border-box;
+        }
+        button {
+            background: #14D38E;
+            color: white;
+            border: none;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        button:hover {
+            background: #11B97C;
+        }
+        #messages {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 10px 0;
+            background: #f9f9f9;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            background: white;
+            border-radius: 4px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Socket.io Chat Test</h1>
+        
+        <div id="status" class="status disconnected">Disconnected</div>
+        
+        <div>
+            <input type="text" id="serverUrl" placeholder="Server URL (http://localhost:3000)" value="http://localhost:3000">
+            <button onclick="connect()">Connect</button>
+            <button onclick="disconnect()">Disconnect</button>
+        </div>
+        
+        <div>
+            <input type="text" id="tripId" placeholder="Trip ID">
+            <button onclick="joinTrip()">Join Trip</button>
+            <button onclick="leaveTrip()">Leave Trip</button>
+        </div>
+        
+        <div>
+            <input type="text" id="senderId" placeholder="Sender User ID">
+            <input type="text" id="senderName" placeholder="Sender Name">
+            <textarea id="messageText" placeholder="Message text"></textarea>
+            <button onclick="sendMessage()">Send Message</button>
+        </div>
+        
+        <h3>Messages:</h3>
+        <div id="messages"></div>
+    </div>
+
+    <script>
+        let socket = null;
+
+        function connect() {
+            const url = document.getElementById('serverUrl').value || 'http://localhost:3000';
+            
+            socket = io(url, {
+                cors: {
+                    origin: "*",
+                    methods: ["GET", "POST"]
+                }
+            });
+
+            socket.on('connect', () => {
+                updateStatus('Connected', true);
+                addMessage('System', 'Connected to server');
+            });
+
+            socket.on('disconnect', () => {
+                updateStatus('Disconnected', false);
+                addMessage('System', 'Disconnected from server');
+            });
+
+            socket.on('joined_trip', (data) => {
+                addMessage('System', `Joined trip: ${data.tripId}`);
+            });
+
+            socket.on('new_message', (data) => {
+                const msg = data.message;
+                addMessage(msg.name || 'Unknown', msg.text, msg.sender_id);
+            });
+
+            socket.on('user_typing', (data) => {
+                console.log(`${data.userName} is typing:`, data.isTyping);
+            });
+
+            socket.on('error', (data) => {
+                addMessage('Error', data.message);
+            });
+        }
+
+        function disconnect() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+            }
+        }
+
+        function joinTrip() {
+            const tripId = document.getElementById('tripId').value;
+            if (socket && tripId) {
+                socket.emit('join_trip', tripId);
+            } else {
+                alert('Please connect first and enter a Trip ID');
+            }
+        }
+
+        function leaveTrip() {
+            const tripId = document.getElementById('tripId').value;
+            if (socket && tripId) {
+                socket.emit('leave_trip', tripId);
+                addMessage('System', `Left trip: ${tripId}`);
+            }
+        }
+
+        function sendMessage() {
+            const tripId = document.getElementById('tripId').value;
+            const senderId = document.getElementById('senderId').value;
+            const senderName = document.getElementById('senderName').value;
+            const text = document.getElementById('messageText').value;
+
+            if (!socket) {
+                alert('Please connect first');
+                return;
+            }
+
+            if (!tripId || !senderId || !text) {
+                alert('Please fill in Trip ID, Sender ID, and Message');
+                return;
+            }
+
+            socket.emit('send_message', {
+                tripId: tripId,
+                sender_id: senderId,
+                name: senderName || 'Anonymous',
+                text: text,
+                file: ''
+            });
+
+            document.getElementById('messageText').value = '';
+        }
+
+        function updateStatus(text, connected) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = text;
+            statusEl.className = 'status ' + (connected ? 'connected' : 'disconnected');
+        }
+
+        function addMessage(sender, text, senderId = null) {
+            const messagesEl = document.getElementById('messages');
+            const messageEl = document.createElement('div');
+            messageEl.className = 'message';
+            messageEl.innerHTML = `<strong>${sender}:</strong> ${text}`;
+            messagesEl.appendChild(messageEl);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+    </script>
+</body>
+</html>

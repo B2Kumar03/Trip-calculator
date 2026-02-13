@@ -1,4 +1,10 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
+import { useParams, useLocation } from "react-router-dom";
+import { tripAPI, expenseAPI } from "../services/api";
+import { useApi } from "../hooks/useApi";
+import { validateAmount, validateTripName } from "../utils/validation";
+import LoadingButton from "../components/LoadingButton";
+import toast from "react-hot-toast";
 
 const CATEGORIES = [
   { id: "food", label: "Food", icon: "fork-knife" },
@@ -15,21 +21,53 @@ const SPLIT_METHODS = [
 ];
 
 const AddNewExpense = ({ onBack, onSave, tripName }) => {
+  const { tripId } = useParams();
+  const location = useLocation();
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("food");
-  const [paidBy, setPaidBy] = useState("you");
+  const [paidBy, setPaidBy] = useState("");
   const [splitMethod, setSplitMethod] = useState("equally");
   const [everyoneSelected, setEveryoneSelected] = useState(true);
-  const [selectedMemberIds, setSelectedMemberIds] = useState([0, 1, 2]);
-  const [customAmounts, setCustomAmounts] = useState({ 0: "600", 1: "1000", 2: "800" });
-  const [percentages, setPercentages] = useState({ 0: "40", 1: "30", 2: "20" });
+  const [selectedMemberIds, setSelectedMemberIds] = useState([]);
+  const [customAmounts, setCustomAmounts] = useState({});
+  const [percentages, setPercentages] = useState({});
+  const [members, setMembers] = useState([]);
+  const [errors, setErrors] = useState({});
+  const { execute, loading } = useApi();
 
-  const members = [
-    { id: 0, name: "You (Arjun)", isYou: true },
-    { id: 1, name: "Priya Sharma", isYou: false },
-    { id: 2, name: "Rahul Varma", isYou: false },
-  ];
+  useEffect(() => {
+    loadTripMembers();
+  }, [tripId]);
+
+  const loadTripMembers = async () => {
+    const id = tripId || location.state?.trip?.tripId;
+    if (!id) return;
+
+    await execute(
+      () => tripAPI.getById(id),
+      {
+        silent: true,
+        onSuccess: (data) => {
+          const trip = data.data;
+          const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
+          const userId = currentUser._id || currentUser.id;
+          
+          const membersList = (trip.members_id || []).map(member => ({
+            id: member._id || member.id,
+            name: member.user_full_name || "Unknown",
+            isYou: (member._id || member.id) === userId,
+          }));
+          
+          setMembers(membersList);
+          if (membersList.length > 0) {
+            setPaidBy(membersList.find(m => m.isYou)?.id || membersList[0].id);
+            setSelectedMemberIds(membersList.map(m => m.id));
+          }
+        },
+      }
+    );
+  };
 
   const amountNum = useMemo(() => {
     const n = parseFloat(String(amount).replace(/[^0-9.]/g, "")) || 0;
@@ -89,10 +127,95 @@ const AddNewExpense = ({ onBack, onSave, tripName }) => {
     setSelectedMemberIds(members.map((m) => m.id));
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    onSave?.();
-    onBack();
+    setErrors({});
+
+    // Validate
+    const titleValidation = validateTripName(title);
+    const amountValidation = validateAmount(amount);
+    
+    if (!titleValidation.valid || !amountValidation.valid) {
+      const newErrors = {};
+      if (!titleValidation.valid) newErrors.title = titleValidation.message;
+      if (!amountValidation.valid) newErrors.amount = amountValidation.message;
+      setErrors(newErrors);
+      return;
+    }
+
+    if (!paidBy) {
+      setErrors({ ...errors, paidBy: "Please select who paid" });
+      return;
+    }
+
+    const tripIdToUse = tripId || location.state?.trip?.tripId;
+    if (!tripIdToUse) {
+      toast.error("Trip ID not found");
+      return;
+    }
+
+    // Build split_between array
+    const splitBetween = [];
+    const memberIdsToSplit = everyoneSelected ? members.map(m => m.id) : selectedMemberIds;
+    
+    if (splitMethod === "equally") {
+      const perPerson = amountNum / memberIdsToSplit.length;
+      memberIdsToSplit.forEach(memberId => {
+        splitBetween.push({
+          user_id: memberId,
+          amount: perPerson,
+        });
+      });
+    } else if (splitMethod === "custom") {
+      memberIdsToSplit.forEach(memberId => {
+        const customAmount = parseFloat(customAmounts[memberId] || 0);
+        if (customAmount > 0) {
+          splitBetween.push({
+            user_id: memberId,
+            amount: customAmount,
+          });
+        }
+      });
+    } else if (splitMethod === "percentage") {
+      if (Math.abs(100 - totalPercentage) > 0.01) {
+        toast.error(`Percentages must add up to 100% (currently ${totalPercentage}%)`);
+        return;
+      }
+      memberIdsToSplit.forEach(memberId => {
+        const percentage = parseFloat(percentages[memberId] || 0);
+        const amountForMember = (amountNum * percentage) / 100;
+        if (amountForMember > 0) {
+          splitBetween.push({
+            user_id: memberId,
+            amount: amountForMember,
+          });
+        }
+      });
+    }
+
+    if (splitBetween.length === 0) {
+      toast.error("Please select at least one person to split with");
+      return;
+    }
+
+    await execute(
+      () => expenseAPI.create({
+        trip_id: tripIdToUse,
+        expense_title: title.trim(),
+        amount: amountNum,
+        category,
+        paid_by_id: paidBy,
+        split_between: splitBetween,
+      }),
+      {
+        successMessage: "Expense added successfully!",
+        errorMessage: "Failed to add expense",
+        onSuccess: () => {
+          onSave?.();
+          onBack();
+        },
+      }
+    );
   };
 
   const CategoryIcon = ({ type }) => {
@@ -158,11 +281,20 @@ const AddNewExpense = ({ onBack, onSave, tripName }) => {
                   <input
                     type="text"
                     value={title}
-                    onChange={(e) => setTitle(e.target.value)}
+                    onChange={(e) => {
+                      setTitle(e.target.value);
+                      if (errors.title) setErrors({ ...errors, title: null });
+                    }}
                     placeholder="e.g. Dinner at Taj Mahal"
-                    className="w-full pl-10 pr-4 py-3 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] focus:outline-none focus:border-[#2ecc71] focus:ring-1 focus:ring-[#2ecc71] text-[#1F2937] placeholder-[#9CA3AF]"
+                    className={`w-full pl-10 pr-4 py-3 rounded-lg border bg-[#F9FAFB] focus:outline-none focus:ring-1 text-[#1F2937] placeholder-[#9CA3AF] ${
+                      errors.title ? "border-red-500 focus:border-red-500 focus:ring-red-500" : "border-[#E5E7EB] focus:border-[#2ecc71] focus:ring-[#2ecc71]"
+                    }`}
+                    required
                   />
                 </div>
+                {errors.title && (
+                  <p className="mt-1 text-xs text-red-500">{errors.title}</p>
+                )}
               </div>
               <div className="min-w-0 sm:w-[40%] sm:flex-[0.4]">
                 <label className="block text-[11px] font-semibold text-[#4B5563] uppercase tracking-wider mb-2">Amount (₹)</label>
@@ -172,11 +304,20 @@ const AddNewExpense = ({ onBack, onSave, tripName }) => {
                     type="text"
                     inputMode="decimal"
                     value={amount}
-                    onChange={(e) => setAmount(e.target.value)}
+                    onChange={(e) => {
+                      setAmount(e.target.value);
+                      if (errors.amount) setErrors({ ...errors, amount: null });
+                    }}
                     placeholder="0.00"
-                    className="w-full pl-8 pr-4 py-3 rounded-lg border border-[#2ecc71]/40 bg-[#F9FAFB] focus:outline-none focus:border-[#2ecc71] focus:ring-1 focus:ring-[#2ecc71] text-[#1F2937] placeholder-[#9CA3AF]"
+                    className={`w-full pl-8 pr-4 py-3 rounded-lg border bg-[#F9FAFB] focus:outline-none focus:ring-1 text-[#1F2937] placeholder-[#9CA3AF] ${
+                      errors.amount ? "border-red-500 focus:border-red-500 focus:ring-red-500" : "border-[#2ecc71]/40 focus:border-[#2ecc71] focus:ring-[#2ecc71]"
+                    }`}
+                    required
                   />
                 </div>
+                {errors.amount && (
+                  <p className="mt-1 text-xs text-red-500">{errors.amount}</p>
+                )}
               </div>
             </div>
 
@@ -207,14 +348,25 @@ const AddNewExpense = ({ onBack, onSave, tripName }) => {
               <label className="block text-[11px] font-semibold text-[#4B5563] uppercase tracking-wider mb-2">Paid By</label>
               <select
                 value={paidBy}
-                onChange={(e) => setPaidBy(e.target.value)}
-                className="w-full px-4 py-3 rounded-lg border border-[#E5E7EB] bg-[#F9FAFB] focus:outline-none focus:border-[#2ecc71] focus:ring-1 focus:ring-[#2ecc71] text-[#1F2937] appearance-none bg-no-repeat bg-[length:12px] bg-[right_12px_center] pr-10"
-                style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236B7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E\")" }}
+                onChange={(e) => {
+                  setPaidBy(e.target.value);
+                  if (errors.paidBy) setErrors({ ...errors, paidBy: null });
+                }}
+                className={`w-full px-4 py-3 rounded-lg border bg-[#F9FAFB] focus:outline-none focus:ring-1 text-[#1F2937] appearance-none bg-no-repeat bg-[length:12px] bg-[right_12px_center] pr-10 ${
+                  errors.paidBy ? "border-red-500 focus:border-red-500 focus:ring-red-500" : "border-[#E5E7EB] focus:border-[#2ecc71] focus:ring-[#2ecc71]"
+                }`}
+                required
               >
-                <option value="you">You (Arjun)</option>
-                <option value="priya">Priya Sharma</option>
-                <option value="rahul">Rahul Varma</option>
+                <option value="">Select who paid</option>
+                {members.map((member) => (
+                  <option key={member.id} value={member.id}>
+                    {member.isYou ? `You (${member.name})` : member.name}
+                  </option>
+                ))}
               </select>
+              {errors.paidBy && (
+                <p className="mt-1 text-xs text-red-500">{errors.paidBy}</p>
+              )}
               <p className="flex items-center gap-1.5 text-[#9CA3AF] text-xs mt-2">
                 <span className="w-1 h-1 rounded-full bg-[#9CA3AF]" />
                 The person who initially paid the full amount.
@@ -421,15 +573,17 @@ const AddNewExpense = ({ onBack, onSave, tripName }) => {
               >
                 Cancel
               </button>
-              <button
+              <LoadingButton
                 type="submit"
+                loading={loading}
                 className="flex-1 py-3.5 rounded-lg bg-[#2ecc71] text-white font-bold uppercase text-sm tracking-wide hover:bg-[#27ae60] flex items-center justify-center gap-2 shadow-sm"
+                variant="primary"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                 </svg>
                 SAVE EXPENSE
-              </button>
+              </LoadingButton>
             </div>
           </div>
 

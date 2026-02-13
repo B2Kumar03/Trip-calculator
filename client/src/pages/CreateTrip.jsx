@@ -1,4 +1,9 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import LoadingButton from "../components/LoadingButton";
+import { useApi } from "../hooks/useApi";
+import { tripAPI, userAPI } from "../services/api";
+import { validateTripName, validateDateRange, validateEmail, validateName } from "../utils/validation";
+import toast from "react-hot-toast";
 
 const TRIP_ICONS = [
   { id: "bike", label: "Bike", icon: "bike" },
@@ -13,12 +18,29 @@ const CreateTrip = ({ onBack, onCreateTrip }) => {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [selectedIcon, setSelectedIcon] = useState("bike");
-  const [fullName, setFullName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [members, setMembers] = useState([
-    { id: 1, name: "Rahul Sharma", initials: "RS", contact: "+919988776655", isYou: true, isAdmin: true },
-    { id: 2, name: "Vijay Pratap", initials: "VP", contact: "+919122334455", isYou: false, isAdmin: false },
-  ]);
+  const [memberName, setMemberName] = useState("");
+  const [memberEmail, setMemberEmail] = useState("");
+  const [members, setMembers] = useState([]);
+  const [errors, setErrors] = useState({});
+  const [currentUser, setCurrentUser] = useState(null);
+
+  useEffect(() => {
+    // Load current user and add as first member
+    const user = JSON.parse(localStorage.getItem("user") || "{}");
+    if (user._id || user.id) {
+      setCurrentUser(user);
+      const userName = user.user_full_name || "You";
+      const initials = userName.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase() || "U";
+      setMembers([{
+        id: user._id || user.id,
+        name: userName,
+        email: user.email || "",
+        initials,
+        isYou: true,
+        isAdmin: true,
+      }]);
+    }
+  }, []);
 
   const TripIcon = ({ iconId, selected, onClick }) => {
     const iconClass = "w-8 h-8 sm:w-10 sm:h-10";
@@ -49,28 +71,130 @@ const CreateTrip = ({ onBack, onCreateTrip }) => {
   };
 
   const handleAddMember = () => {
-    if (!fullName.trim()) return;
-    const words = fullName.trim().split(/\s+/);
-    const initials = words.length >= 2 ? (words[0][0] + words[1][0]).toUpperCase() : fullName.slice(0, 2).toUpperCase();
+    setErrors({});
+    
+    const nameValidation = validateName(memberName);
+    const emailValidation = validateEmail(memberEmail);
+    
+    if (!nameValidation.valid || !emailValidation.valid) {
+      const newErrors = {};
+      if (!nameValidation.valid) newErrors.memberName = nameValidation.message;
+      if (!emailValidation.valid) newErrors.memberEmail = emailValidation.message;
+      setErrors(newErrors);
+      return;
+    }
+
+    // Check if email already exists in members
+    if (members.some(m => m.email?.toLowerCase() === memberEmail.trim().toLowerCase())) {
+      toast.error("This email is already added to the trip");
+      return;
+    }
+
+    const words = memberName.trim().split(/\s+/);
+    const initials = words.length >= 2 ? (words[0][0] + words[1][0]).toUpperCase() : memberName.slice(0, 2).toUpperCase();
     setMembers((prev) => [
       ...prev,
-      { id: Date.now(), name: fullName.trim(), initials, contact: "+91" + phone.replace(/\D/g, ""), isYou: false, isAdmin: false },
+      { 
+        id: `temp_${Date.now()}`, 
+        name: memberName.trim(), 
+        email: memberEmail.trim().toLowerCase(),
+        initials, 
+        isYou: false, 
+        isAdmin: false 
+      },
     ]);
-    setFullName("");
-    setPhone("");
+    setMemberName("");
+    setMemberEmail("");
+    setErrors({});
   };
 
   const handleRemoveMember = (id) => {
     setMembers((prev) => prev.filter((m) => m.id !== id));
   };
 
-  const handleSubmit = () => {
-    onCreateTrip?.({
-      tripName: tripName || "New Trip",
-      tripDates: startDate && endDate ? `${startDate} - ${endDate}` : "TBD",
-      location: "",
-      travelersCount: members.length,
-    });
+  const { execute, loading } = useApi();
+
+  const handleSubmit = async () => {
+    setErrors({});
+    
+    // Validate form
+    const tripNameValidation = validateTripName(tripName);
+    const dateValidation = validateDateRange(startDate, endDate);
+    
+    if (!tripNameValidation.valid || !dateValidation.valid) {
+      const newErrors = {};
+      if (!tripNameValidation.valid) newErrors.tripName = tripNameValidation.message;
+      if (!dateValidation.valid) {
+        if (!startDate) newErrors.startDate = "Start date is required";
+        else if (!endDate) newErrors.endDate = "End date is required";
+        else newErrors.dateRange = dateValidation.message;
+      }
+      setErrors(newErrors);
+      return;
+    }
+
+    if (members.length === 0) {
+      toast.error("Please add at least one member to the trip");
+      return;
+    }
+
+    // Get current user
+    const user = currentUser || JSON.parse(localStorage.getItem("user") || "{}");
+    if (!user._id && !user.id) {
+      toast.error("Please login first");
+      return;
+    }
+    
+    // Create or find users for members
+    const memberIds = [];
+    for (const member of members) {
+      if (member.isYou) {
+        memberIds.push(user._id || user.id);
+      } else {
+        try {
+          let userResult;
+          try {
+            // Try to find user by email
+            userResult = await userAPI.getByEmail(member.email);
+          } catch {
+            // User doesn't exist, create one
+            userResult = await userAPI.create({
+              user_full_name: member.name,
+              email: member.email,
+              allowedNotification: ["email"],
+            });
+          }
+          memberIds.push(userResult.data._id || userResult.data.id);
+        } catch (error) {
+          console.error("Error creating/finding user:", error);
+          toast.error(`Failed to add member ${member.name}`);
+        }
+      }
+    }
+
+    await execute(
+      () => tripAPI.create({
+        trip_name: tripName.trim(),
+        trip_start_date: new Date(startDate),
+        trip_end_date: new Date(endDate),
+        category: selectedIcon,
+        members_id: memberIds,
+      }),
+      {
+        successMessage: "Trip created successfully! Invitations sent to members.",
+        errorMessage: "Failed to create trip",
+        onSuccess: (data) => {
+          const trip = data.data;
+          onCreateTrip?.({
+            tripId: trip._id,
+            tripName: trip.trip_name,
+            tripDates: `${new Date(trip.trip_start_date).toLocaleDateString()} - ${new Date(trip.trip_end_date).toLocaleDateString()}`,
+            location: trip.category || "",
+            travelersCount: trip.members_id?.length || members.length,
+          });
+        },
+      }
+    );
   };
 
   return (
@@ -100,37 +224,65 @@ const CreateTrip = ({ onBack, onCreateTrip }) => {
               <input
                 type="text"
                 value={tripName}
-                onChange={(e) => setTripName(e.target.value)}
+                onChange={(e) => {
+                  setTripName(e.target.value);
+                  if (errors.tripName) setErrors({ ...errors, tripName: null });
+                }}
                 placeholder="e.g. Ladakh Bike Expedition 2024"
-                className="w-full px-4 py-2.5 rounded-lg border-2 border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#2ecc71] focus:border-[#2ecc71]"
+                className={`w-full px-4 py-2.5 rounded-lg border-2 focus:outline-none focus:ring-2 focus:ring-[#2ecc71] focus:border-[#2ecc71] ${
+                  errors.tripName ? "border-red-500" : "border-gray-200"
+                }`}
+                required
               />
+              {errors.tripName && (
+                <p className="mt-1 text-sm text-red-500">{errors.tripName}</p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
                 <div className="relative">
                   <input
-                    type="text"
+                    type="date"
                     value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
-                    placeholder="mm/dd/yyyy"
-                    className="w-full px-4 py-2.5 pr-10 rounded-lg border-2 border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#2ecc71] focus:border-[#2ecc71]"
+                    onChange={(e) => {
+                      setStartDate(e.target.value);
+                      if (errors.startDate || errors.dateRange) setErrors({ ...errors, startDate: null, dateRange: null });
+                    }}
+                    className={`w-full px-4 py-2.5 pr-10 rounded-lg border-2 focus:outline-none focus:ring-2 focus:ring-[#2ecc71] focus:border-[#2ecc71] ${
+                      errors.startDate ? "border-red-500" : "border-gray-200"
+                    }`}
+                    required
                   />
-                  <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                  <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                 </div>
+                {errors.startDate && (
+                  <p className="mt-1 text-sm text-red-500">{errors.startDate}</p>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
                 <div className="relative">
                   <input
-                    type="text"
+                    type="date"
                     value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
-                    placeholder="mm/dd/yyyy"
-                    className="w-full px-4 py-2.5 pr-10 rounded-lg border-2 border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#2ecc71] focus:border-[#2ecc71]"
+                    onChange={(e) => {
+                      setEndDate(e.target.value);
+                      if (errors.endDate || errors.dateRange) setErrors({ ...errors, endDate: null, dateRange: null });
+                    }}
+                    className={`w-full px-4 py-2.5 pr-10 rounded-lg border-2 focus:outline-none focus:ring-2 focus:ring-[#2ecc71] focus:border-[#2ecc71] ${
+                      errors.endDate ? "border-red-500" : "border-gray-200"
+                    }`}
+                    required
                   />
-                  <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                  <svg className="absolute right-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                 </div>
+                {errors.endDate && (
+                  <p className="mt-1 text-sm text-red-500">{errors.endDate}</p>
+                )}
+                {errors.dateRange && (
+                  <p className="mt-1 text-sm text-red-500">{errors.dateRange}</p>
+                )}
               </div>
             </div>
             <div>
@@ -157,25 +309,37 @@ const CreateTrip = ({ onBack, onCreateTrip }) => {
               <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Full Name</label>
               <input
                 type="text"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
+                value={memberName}
+                onChange={(e) => {
+                  setMemberName(e.target.value);
+                  if (errors.memberName) setErrors({ ...errors, memberName: null });
+                }}
                 placeholder="e.g. Amit Kumar"
-                className="w-full px-4 py-2.5 rounded-lg border-2 border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#2ecc71] focus:border-[#2ecc71]"
+                className={`w-full px-4 py-2.5 rounded-lg border-2 focus:outline-none focus:ring-2 focus:ring-[#2ecc71] focus:border-[#2ecc71] ${
+                  errors.memberName ? "border-red-500" : "border-gray-200"
+                }`}
               />
+              {errors.memberName && (
+                <p className="mt-1 text-xs text-red-500">{errors.memberName}</p>
+              )}
             </div>
             <div>
-              <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Phone Number</label>
-              <div className="flex gap-2">
-                <div className="px-4 py-2.5 rounded-lg border-2 border-gray-200 bg-gray-50 text-gray-600 font-medium shrink-0">+91</div>
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="9876543210"
-                  maxLength={10}
-                  className="flex-1 px-4 py-2.5 rounded-lg border-2 border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#2ecc71] focus:border-[#2ecc71]"
-                />
-              </div>
+              <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1">Email Address</label>
+              <input
+                type="email"
+                value={memberEmail}
+                onChange={(e) => {
+                  setMemberEmail(e.target.value);
+                  if (errors.memberEmail) setErrors({ ...errors, memberEmail: null });
+                }}
+                placeholder="amit@example.com"
+                className={`w-full px-4 py-2.5 rounded-lg border-2 focus:outline-none focus:ring-2 focus:ring-[#2ecc71] focus:border-[#2ecc71] ${
+                  errors.memberEmail ? "border-red-500" : "border-gray-200"
+                }`}
+              />
+              {errors.memberEmail && (
+                <p className="mt-1 text-xs text-red-500">{errors.memberEmail}</p>
+              )}
             </div>
             <button
               type="button"
@@ -192,7 +356,7 @@ const CreateTrip = ({ onBack, onCreateTrip }) => {
               <thead>
                 <tr className="border-b border-gray-200">
                   <th className="text-[10px] font-bold text-gray-500 uppercase tracking-wider py-3 pr-4">Member</th>
-                  <th className="text-[10px] font-bold text-gray-500 uppercase tracking-wider py-3 pr-4">Contact</th>
+                  <th className="text-[10px] font-bold text-gray-500 uppercase tracking-wider py-3 pr-4">Email</th>
                   <th className="text-[10px] font-bold text-gray-500 uppercase tracking-wider py-3 pr-4 text-right">Action</th>
                 </tr>
               </thead>
@@ -207,12 +371,12 @@ const CreateTrip = ({ onBack, onCreateTrip }) => {
                         <span className="font-medium text-gray-800">{m.name}{m.isYou ? " (You)" : ""}</span>
                       </div>
                     </td>
-                    <td className="py-3 pr-4 text-gray-600 text-sm">{m.contact}</td>
+                    <td className="py-3 pr-4 text-gray-600 text-sm">{m.email || "N/A"}</td>
                     <td className="py-3 pr-4 text-right">
                       {m.isAdmin ? (
                         <span className="inline-block px-2 py-1 rounded bg-[#E8FBF4] text-[#2ecc71] text-xs font-semibold">Admin</span>
                       ) : (
-                        <button type="button" onClick={() => handleRemoveMember(m.id)} className="p-2 rounded-lg text-red-500 hover:bg-red-50" aria-label="Remove member">
+                        <button type="button" onClick={() => handleRemoveMember(m.id)} className="p-2 rounded-lg text-red-500 hover:bg-red-50 cursor-pointer" aria-label="Remove member">
                           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                         </button>
                       )}
@@ -227,9 +391,15 @@ const CreateTrip = ({ onBack, onCreateTrip }) => {
             <button type="button" onClick={onBack} className="flex-1 min-h-[44px] px-4 py-2.5 rounded-lg border-2 border-gray-200 text-gray-700 font-semibold hover:bg-gray-50">
               Cancel
             </button>
-            <button type="button" onClick={handleSubmit} className="flex-1 min-h-[44px] px-4 py-2.5 rounded-lg bg-[#2ecc71] text-white font-semibold hover:bg-[#27ae60]">
+            <LoadingButton
+              type="button"
+              onClick={handleSubmit}
+              loading={loading}
+              className="flex-1 min-h-[44px]"
+              variant="primary"
+            >
               Create Trip
-            </button>
+            </LoadingButton>
           </div>
         </div>
       </main>

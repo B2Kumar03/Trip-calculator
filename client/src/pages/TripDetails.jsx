@@ -1,21 +1,189 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { useParams, useLocation, useNavigate } from "react-router-dom";
+import { tripAPI, expenseAPI, settlementAPI } from "../services/api";
+import { useApi } from "../hooks/useApi";
 
-const TripDetails = ({ onBack, onOpenChat, onAddExpense, onOpenSettlements, onOpenProfile, onOpenNotifications, onOpenAdminControls, tripName = "Manali Adventure 2024", tripDates = "12 Oct - 20 Oct 2024", location = "Himachal Pradesh, India" }) => {
+const TripDetails = ({ onBack, onOpenChat, onAddExpense, onOpenSettlements, onOpenProfile, onOpenNotifications, onOpenAdminControls }) => {
+  const { tripId } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("expenses");
+  const [trip, setTrip] = useState(null);
+  const [expenses, setExpenses] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [settlements, setSettlements] = useState([]);
+  const { execute, loading } = useApi();
 
-  const expenses = [
-    { title: "Dinner at Highway Dhaba", iconBg: "bg-orange-400", icon: "fork-knife", paidBy: "Rahul Sharma", when: "Today, 9:30 PM", amount: "₹2,450", split: "Split equally (5)" },
-    { title: "Innova Rental & Fuel", iconBg: "bg-sky-400", icon: "car", paidBy: "You", when: "Today, 11:15 AM", amount: "₹12,000", split: "Custom split" },
-    { title: "River Rafting - Beas River", iconBg: "bg-violet-500", icon: "boat", paidBy: "Priya Singh", when: "Yesterday", amount: "₹4,500", split: "Split equally (5)" },
-    { title: "Snacks and Maggi", iconBg: "bg-emerald-500", icon: "bag", paidBy: "Amit Verma", when: "Yesterday", amount: "₹850", split: "Split equally (5)" },
-  ];
+  useEffect(() => {
+    loadTripData();
+  }, [tripId]);
 
-  const members = [
-    { name: "You (Arjun)", role: "ADMIN", balance: "+₹2,400", positive: true },
-    { name: "Priya Singh", balance: "-₹1,200", positive: false },
-    { name: "Rahul Sharma", balance: "Settled", positive: null },
-    { name: "Neha Kapoor", balance: "-₹800", positive: false },
-  ];
+  const loadTripData = async () => {
+    if (!tripId) {
+      // Try to get tripId from location state
+      const tripFromState = location.state?.trip;
+      if (tripFromState?.tripId) {
+        await loadTrip(tripFromState.tripId);
+        return;
+      }
+      return;
+    }
+    await loadTrip(tripId);
+  };
+
+  const loadTrip = async (id) => {
+    await execute(
+      () => tripAPI.getById(id),
+      {
+        silent: true,
+        onSuccess: async (data) => {
+          const tripData = data.data;
+          setTrip(tripData);
+          
+          // Load members first
+          if (tripData.members_id) {
+            const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
+            const userId = currentUser._id || currentUser.id;
+            
+            const membersList = tripData.members_id.map(member => ({
+              id: member._id || member.id,
+              name: member.user_full_name || "Unknown",
+              email: member.email || "",
+              initials: (member.user_full_name || "U").split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase(),
+              isAdmin: tripData.members_id[0]?._id === (member._id || member.id),
+              isYou: (member._id || member.id) === userId,
+            }));
+            
+            // Load expenses
+            try {
+              const expensesRes = await expenseAPI.getByTrip(id);
+              const expensesList = expensesRes.data || [];
+              const formattedExpenses = expensesList.map(exp => ({
+                id: exp._id,
+                title: exp.expense_title,
+                iconBg: getCategoryColor(exp.category || "other"),
+                icon: getCategoryIcon(exp.category || "other"),
+                paidBy: exp.paid_by_id?.user_full_name || "Unknown",
+                paidById: exp.paid_by_id?._id || exp.paid_by_id?.id,
+                when: formatDate(exp.createdAt || exp.expense_date),
+                amount: `₹${(exp.amount || 0).toLocaleString("en-IN")}`,
+                split: formatSplit(exp.split_between || []),
+                amountNum: exp.amount || 0,
+                split_between: exp.split_between || [],
+              }));
+              setExpenses(formattedExpenses);
+
+              // Calculate balances for members
+              const balances = calculateBalances(formattedExpenses, membersList, userId);
+              setMembers(membersList.map(m => ({
+                ...m,
+                balance: balances[m.id] || "₹0",
+                positive: balances[m.id]?.startsWith("+"),
+              })));
+            } catch (error) {
+              console.error("Error loading expenses:", error);
+              setMembers(membersList);
+            }
+
+            // Load settlements
+            try {
+              const settlementRes = await settlementAPI.getByTrip(id);
+              const settlementData = settlementRes.data || [];
+              setSettlements(settlementData);
+            } catch (error) {
+              console.error("Error loading settlements:", error);
+            }
+          }
+        },
+      }
+    );
+  };
+
+  const calculateBalances = (expensesList, membersList, currentUserId) => {
+    const balances = {};
+    membersList.forEach(m => balances[m.id] = 0);
+
+    expensesList.forEach(exp => {
+      const paidById = exp.paidById;
+      const splitBetween = exp.split_between || [];
+      const totalAmount = exp.amountNum || 0;
+      
+      // Subtract what each person owes
+      splitBetween.forEach(split => {
+        const splitUserId = split.user_id?._id || split.user_id?.id;
+        const amount = split.amount || 0;
+        
+        if (splitUserId && balances[splitUserId] !== undefined) {
+          balances[splitUserId] -= amount;
+        }
+      });
+      
+      // Add what the payer paid
+      if (paidById && balances[paidById] !== undefined) {
+        balances[paidById] += totalAmount;
+      }
+    });
+
+    return Object.fromEntries(
+      Object.entries(balances).map(([id, balance]) => [
+        id,
+        balance >= 0 ? `+₹${Math.abs(balance).toLocaleString("en-IN")}` : `-₹${Math.abs(balance).toLocaleString("en-IN")}`
+      ])
+    );
+  };
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return "Unknown date";
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  };
+
+  const formatSplit = (splitBetween) => {
+    if (!splitBetween || splitBetween.length === 0) return "Not split";
+    if (splitBetween.length === 1) return "Paid by one person";
+    const equalAmounts = splitBetween.every(s => s.amount === splitBetween[0].amount);
+    if (equalAmounts) return `Split equally (${splitBetween.length})`;
+    return `Custom split (${splitBetween.length})`;
+  };
+
+  const getCategoryColor = (category) => {
+    const colors = {
+      food: "bg-orange-400",
+      transport: "bg-sky-400",
+      stay: "bg-violet-500",
+      tickets: "bg-purple-500",
+      other: "bg-emerald-500",
+    };
+    return colors[category] || colors.other;
+  };
+
+  const getCategoryIcon = (category) => {
+    const icons = {
+      food: "fork-knife",
+      transport: "car",
+      stay: "bed",
+      tickets: "ticket",
+      other: "bag",
+    };
+    return icons[category] || icons.other;
+  };
+
+  const tripName = trip?.trip_name || location.state?.trip?.tripName || "Loading...";
+  const tripDates = trip 
+    ? `${new Date(trip.trip_start_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })} - ${new Date(trip.trip_end_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`
+    : location.state?.trip?.tripDates || "";
+  const locationName = trip?.category || location.state?.trip?.location || "";
 
   const ExpenseIcon = ({ type, className }) => {
     if (type === "fork-knife")
@@ -96,7 +264,7 @@ const TripDetails = ({ onBack, onOpenChat, onAddExpense, onOpenSettlements, onOp
             <svg className="w-4 h-4 text-[#14D38E]" fill="currentColor" viewBox="0 0 20 20">
               <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
             </svg>
-            {location}
+            {locationName}
           </p>
         </div>
       </div>
@@ -167,15 +335,38 @@ const TripDetails = ({ onBack, onOpenChat, onAddExpense, onOpenSettlements, onOp
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
               <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
                 <p className="text-xs sm:text-sm text-gray-500 font-medium mb-1">Total Trip Spent</p>
-                <p className="text-lg sm:text-xl font-bold text-gray-800">₹42,500</p>
+                <p className="text-lg sm:text-xl font-bold text-gray-800">
+                  ₹{expenses.reduce((sum, exp) => sum + (exp.amountNum || 0), 0).toLocaleString("en-IN")}
+                </p>
               </div>
               <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
                 <p className="text-xs sm:text-sm text-gray-500 font-medium mb-1">Your Share</p>
-                <p className="text-lg sm:text-xl font-bold text-gray-800">₹8,500</p>
+                <p className="text-lg sm:text-xl font-bold text-gray-800">
+                  ₹{expenses.reduce((sum, exp) => {
+                    const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
+                    const userId = currentUser._id || currentUser.id;
+                    const userSplit = exp.split_between?.find(s => 
+                      (s.user_id?._id === userId || s.user_id?.id === userId)
+                    );
+                    return sum + (userSplit?.amount || 0);
+                  }, 0).toLocaleString("en-IN")}
+                </p>
               </div>
-              <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm bg-[#E8FBF4] border-[#14D38E]/20">
-                <p className="text-xs sm:text-sm text-[#0D9668] font-medium mb-1">You are Owed</p>
-                <p className="text-lg sm:text-xl font-bold text-[#0D9668]">₹2,400</p>
+              <div className={`rounded-xl p-4 border shadow-sm ${
+                members.find(m => m.isYou)?.positive 
+                  ? "bg-[#E8FBF4] border-[#14D38E]/20" 
+                  : "bg-white border-gray-100"
+              }`}>
+                <p className={`text-xs sm:text-sm font-medium mb-1 ${
+                  members.find(m => m.isYou)?.positive ? "text-[#0D9668]" : "text-gray-500"
+                }`}>
+                  {members.find(m => m.isYou)?.positive ? "You are Owed" : "You Owe"}
+                </p>
+                <p className={`text-lg sm:text-xl font-bold ${
+                  members.find(m => m.isYou)?.positive ? "text-[#0D9668]" : "text-gray-800"
+                }`}>
+                  {members.find(m => m.isYou)?.balance || "₹0"}
+                </p>
               </div>
             </div>
 
@@ -200,23 +391,36 @@ const TripDetails = ({ onBack, onOpenChat, onAddExpense, onOpenSettlements, onOp
                   </div>
                 </div>
                 <ul className="divide-y divide-gray-100">
-                  {expenses.map((exp, i) => (
-                    <li key={i} className="p-4 hover:bg-gray-50/50">
-                      <div className="flex items-start gap-3">
-                        <div className={`w-11 h-11 rounded-lg flex items-center justify-center shrink-0 ${exp.iconBg} text-white`}>
-                          <ExpenseIcon type={exp.icon} className="w-5 h-5" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-gray-800">{exp.title}</p>
-                          <p className="text-xs sm:text-sm text-gray-500">Paid by {exp.paidBy} • {exp.when}</p>
-                        </div>
-                        <div className="text-right shrink-0">
-                          <p className="font-bold text-gray-800">{exp.amount}</p>
-                          <p className="text-xs text-gray-500">{exp.split}</p>
-                        </div>
-                      </div>
+                  {expenses.length === 0 ? (
+                    <li className="p-8 text-center text-gray-500">
+                      <p className="mb-2">No expenses yet</p>
+                      <button
+                        type="button"
+                        onClick={onAddExpense}
+                        className="text-[#14D38E] font-medium hover:underline cursor-pointer"
+                      >
+                        Add your first expense
+                      </button>
                     </li>
-                  ))}
+                  ) : (
+                    expenses.map((exp) => (
+                      <li key={exp.id} className="p-4 hover:bg-gray-50/50 cursor-pointer">
+                        <div className="flex items-start gap-3">
+                          <div className={`w-11 h-11 rounded-lg flex items-center justify-center shrink-0 ${exp.iconBg} text-white`}>
+                            <ExpenseIcon type={exp.icon} className="w-5 h-5" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-gray-800">{exp.title}</p>
+                            <p className="text-xs sm:text-sm text-gray-500">Paid by {exp.paidBy} • {exp.when}</p>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="font-bold text-gray-800">{exp.amount}</p>
+                            <p className="text-xs text-gray-500">{exp.split}</p>
+                          </div>
+                        </div>
+                      </li>
+                    ))
+                  )}
                 </ul>
               </div>
             )}
@@ -239,28 +443,36 @@ const TripDetails = ({ onBack, onOpenChat, onAddExpense, onOpenSettlements, onOp
                   </button>
                 </div>
                 <ul className="p-4 space-y-4">
-                  {members.map((m, i) => (
-                    <li key={i} className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-gray-600 font-medium text-sm shrink-0 overflow-hidden">
-                          {m.name.startsWith("You") ? "AM" : m.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
+                  {members.length === 0 ? (
+                    <li className="text-center text-gray-500 py-4">No members found</li>
+                  ) : (
+                    members.map((m) => (
+                      <li key={m.id} className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center text-gray-600 font-medium text-sm shrink-0 overflow-hidden ${
+                            m.isYou ? "bg-[#E8FBF4] text-[#2ecc71]" : "bg-gray-200"
+                          }`}>
+                            {m.initials}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-medium text-gray-800 truncate">{m.name}</p>
+                            {m.isAdmin && <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide mt-0.5">ADMIN</p>}
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <p className="font-medium text-gray-800 truncate">{m.name}</p>
-                          {m.role && <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wide mt-0.5">{m.role}</p>}
-                        </div>
-                      </div>
-                      <span className={`text-sm font-semibold shrink-0 ${m.positive === true ? "text-[#2ecc71]" : m.positive === false ? "text-red-600" : "text-gray-500"}`}>
-                        {m.balance}
-                      </span>
-                    </li>
-                  ))}
+                        <span className={`text-sm font-semibold shrink-0 ${m.positive === true ? "text-[#2ecc71]" : m.positive === false ? "text-red-600" : "text-gray-500"}`}>
+                          {m.balance || "₹0"}
+                        </span>
+                      </li>
+                    ))
+                  )}
                 </ul>
-                <div className="p-4 border-t border-gray-100">
-                  <button type="button" onClick={() => setActiveTab("members")} className="w-full py-2.5 rounded-xl bg-gray-100 text-gray-600 text-sm font-medium hover:bg-gray-200 transition-colors">
-                    View All 5 Members
-                  </button>
-                </div>
+                {members.length > 0 && (
+                  <div className="p-4 border-t border-gray-100">
+                    <button type="button" className="w-full py-2.5 rounded-xl bg-gray-100 text-gray-600 text-sm font-medium hover:bg-gray-200 transition-colors cursor-pointer">
+                      View All {members.length} Member{members.length !== 1 ? "s" : ""}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

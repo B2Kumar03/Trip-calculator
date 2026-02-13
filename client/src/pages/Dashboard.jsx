@@ -1,7 +1,76 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { tripAPI, expenseAPI } from "../services/api";
+import { useApi } from "../hooks/useApi";
 
 const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifications, onOpenCreateTrip, onOpenTripSettings, onOpenAdminControls }) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [trips, setTrips] = useState([]);
+  const [summary, setSummary] = useState({ totalPaid: 0, youOwe: 0, youWillGet: 0 });
+  const { execute, loading } = useApi();
+
+  useEffect(() => {
+    loadTrips();
+  }, []);
+
+  const loadTrips = async () => {
+    await execute(
+      () => tripAPI.getAll(),
+      {
+        silent: true,
+        onSuccess: (data) => {
+          setTrips(data.data || []);
+          // Load summary for each trip
+          loadSummary(data.data || []);
+        },
+      }
+    );
+  };
+
+  const loadSummary = async (tripsList) => {
+    try {
+      let totalPaid = 0;
+      let youOwe = 0;
+      let youWillGet = 0;
+      const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
+      const userId = currentUser._id || currentUser.id;
+
+      for (const trip of tripsList) {
+        try {
+          const expenses = await expenseAPI.getByTrip(trip._id);
+          const expenseList = expenses.data || [];
+          
+          expenseList.forEach(exp => {
+            totalPaid += exp.amount || 0;
+            
+            // Check if user paid
+            if (exp.paid_by_id?._id === userId || exp.paid_by_id?.id === userId) {
+              // User paid, check what they're owed
+              const userSplit = exp.split_between?.find(s => 
+                (s.user_id?._id === userId || s.user_id?.id === userId)
+              );
+              if (userSplit) {
+                youWillGet += (exp.amount - (userSplit.amount || 0));
+              }
+            } else {
+              // User didn't pay, check what they owe
+              const userSplit = exp.split_between?.find(s => 
+                (s.user_id?._id === userId || s.user_id?.id === userId)
+              );
+              if (userSplit) {
+                youOwe += userSplit.amount || 0;
+              }
+            }
+          });
+        } catch (error) {
+          console.error("Error loading expenses for trip:", error);
+        }
+      }
+
+      setSummary({ totalPaid, youOwe, youWillGet });
+    } catch (error) {
+      console.error("Error loading summary:", error);
+    }
+  };
 
   return (
     <div className="h-screen min-h-screen bg-[#F6F8F7] flex font-sans overflow-hidden">
@@ -25,7 +94,7 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
       >
         <button
           type="button"
-          className="lg:hidden absolute top-4 right-4 p-2 rounded-lg text-gray-500 hover:bg-gray-100"
+          className="lg:hidden absolute top-4 right-4 p-2 rounded-lg text-gray-500 hover:bg-gray-100 cursor-pointer"
           onClick={() => setSidebarOpen(false)}
           aria-label="Close menu"
         >
@@ -33,7 +102,7 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
-        <button type="button" onClick={onViewProfile} className="w-full p-4 border-b border-gray-100 text-left hover:bg-gray-50 transition-colors">
+        <button type="button" onClick={onViewProfile} className="w-full p-4 border-b border-gray-100 text-left hover:bg-gray-50 transition-colors cursor-pointer">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-full bg-[#14D38E] flex items-center justify-center text-white font-bold text-lg shrink-0">
               AM
@@ -55,7 +124,7 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
             </svg>
             Dashboard
           </a>
-          <button type="button" onClick={() => onOpenAdminControls?.({ tripName: "Rajasthan Expedition", tripDates: "12 Oct – 20 Oct 2024", location: "Rajasthan, India" })} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-600 hover:bg-gray-50 font-medium mb-1 text-left">
+          <button type="button" onClick={() => onOpenAdminControls?.({ tripName: "Rajasthan Expedition", tripDates: "12 Oct – 20 Oct 2024", location: "Rajasthan, India" })} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-600 hover:bg-gray-50 font-medium mb-1 text-left cursor-pointer">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
             </svg>
@@ -67,7 +136,7 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
             </svg>
             Chat
           </a>
-          <button type="button" onClick={onViewProfile} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-600 hover:bg-gray-50 font-medium mb-1 text-left">
+          <button type="button" onClick={onViewProfile} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-gray-600 hover:bg-gray-50 font-medium mb-1 text-left cursor-pointer">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
             </svg>
@@ -83,7 +152,7 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
         </nav>
 
         <div className="p-3 border-t border-gray-100" onClick={() => setSidebarOpen(false)}>
-          <button type="button" className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-[#14D38E] text-white font-bold hover:bg-[#11B97C] transition-colors">
+          <button type="button" onClick={onOpenCreateTrip} className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-[#14D38E] text-white font-bold hover:bg-[#11B97C] transition-colors cursor-pointer">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 5v14M5 12h14" />
             </svg>
@@ -98,7 +167,7 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
         <header className="h-14 sm:h-16 shrink-0 bg-white border-b border-gray-100 px-4 sm:px-6 flex items-center gap-3 sm:gap-6">
           <button
             type="button"
-            className="lg:hidden p-2 -ml-1 rounded-lg text-gray-600 hover:bg-gray-100"
+            className="lg:hidden p-2 -ml-1 rounded-lg text-gray-600 hover:bg-gray-100 cursor-pointer"
             onClick={() => setSidebarOpen(true)}
             aria-label="Open menu"
           >
@@ -129,13 +198,13 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
           </div>
 
           <div className="flex items-center gap-1 sm:gap-3 shrink-0">
-            <button type="button" onClick={onOpenNotifications} className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 relative" aria-label="Notifications">
+            <button type="button" onClick={onOpenNotifications} className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 relative cursor-pointer" aria-label="Notifications">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
               </svg>
               <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-red-500" />
             </button>
-            <button type="button" className="px-3 sm:px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-700 font-medium text-xs sm:text-sm hover:bg-gray-50">
+            <button type="button" className="px-3 sm:px-4 py-2 rounded-xl border border-gray-200 bg-white text-gray-700 font-medium text-xs sm:text-sm hover:bg-gray-50 cursor-pointer">
               IND (₹)
             </button>
           </div>
@@ -155,7 +224,7 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
                 </svg>
               </div>
               <p className="text-xs sm:text-sm text-gray-500 font-medium mb-1">Total Paid</p>
-              <p className="text-xl sm:text-2xl font-bold text-gray-800">₹45,000</p>
+              <p className="text-xl sm:text-2xl font-bold text-gray-800">₹{summary.totalPaid.toLocaleString('en-IN')}</p>
             </div>
 
             <div className="bg-white rounded-xl sm:rounded-2xl p-4 sm:p-5 border border-gray-100 shadow-sm">
@@ -165,7 +234,7 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
                 </svg>
               </div>
               <p className="text-xs sm:text-sm text-gray-500 font-medium mb-1">You Owe</p>
-              <p className="text-xl sm:text-2xl font-bold text-gray-800">₹2,500</p>
+              <p className="text-xl sm:text-2xl font-bold text-gray-800">₹{summary.youOwe.toLocaleString('en-IN')}</p>
             </div>
 
             <div className="bg-white rounded-xl sm:rounded-2xl p-4 sm:p-5 border border-gray-100 shadow-sm">
@@ -175,7 +244,7 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
                 </svg>
               </div>
               <p className="text-xs sm:text-sm text-gray-500 font-medium mb-1">You Will Get</p>
-              <p className="text-xl sm:text-2xl font-bold text-gray-800">₹8,700</p>
+              <p className="text-xl sm:text-2xl font-bold text-gray-800">₹{summary.youWillGet.toLocaleString('en-IN')}</p>
             </div>
           </div>
 
@@ -186,101 +255,84 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
               <a href="#all" className="text-sm font-semibold text-[#14D38E] hover:underline shrink-0">See All</a>
             </div>
 
-            <div className="space-y-3 sm:space-y-4">
-              {/* Trip Card 1 - Rajasthan Expedition */}
-              <div className="bg-white rounded-xl sm:rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <div className="h-32 sm:h-40 bg-gray-200 flex items-center justify-center text-gray-400 text-sm">
-                  Map placeholder – Rajasthan
-                </div>
-                <div className="p-4 sm:p-5">
-                  <h3 className="font-bold text-gray-800 text-base sm:text-lg mb-1">Rajasthan Expedition</h3>
-                  <p className="text-xs sm:text-sm text-gray-500 mb-3">Oct 12–Oct 20, 2024 • 4 Participants</p>
-                  <div className="flex items-center justify-between gap-3 sm:gap-4 flex-wrap">
-                    <div className="flex-1 min-w-0">
-                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden mb-1.5">
-                        <div className="h-full w-[65%] bg-[#14D38E] rounded-full" />
+            {loading && trips.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">Loading trips...</div>
+            ) : trips.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">No trips yet. Create your first trip!</div>
+            ) : (
+              <div className="space-y-3 sm:space-y-4">
+                {trips.map((trip) => {
+                  const startDate = new Date(trip.trip_start_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+                  const endDate = new Date(trip.trip_end_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+                  const membersCount = trip.members_id?.length || 0;
+                  const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
+                  const isAdmin = trip.members_id?.some(m => (m._id === currentUser._id || m.id === currentUser.id)) || false;
+                  
+                  return (
+                    <div key={trip._id} className="bg-white rounded-xl sm:rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                      <div className="h-32 sm:h-40 bg-gray-200 flex items-center justify-center text-gray-400 text-sm">
+                        {trip.trip_cover_image ? (
+                          <img src={trip.trip_cover_image} alt={trip.trip_name} className="w-full h-full object-cover" />
+                        ) : (
+                          `Map placeholder – ${trip.trip_name}`
+                        )}
                       </div>
-                      <p className="text-xs text-gray-500">
-                        Spent: <span className="font-semibold text-gray-700">₹32,400</span>
-                        <span className="ml-2">Budget: ₹50,000</span>
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <div className="w-8 h-8 rounded-full bg-gray-300 border-2 border-white" />
-                      <div className="w-8 h-8 rounded-full bg-gray-400 border-2 border-white" />
-                      <div className="w-8 h-8 rounded-full bg-gray-500 border-2 border-white" />
-                      <span className="text-xs font-medium text-gray-500 ml-1">+1</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
-                    <span className="text-xs font-bold text-[#0D9668] bg-[#E8FBF4] px-2 py-1 rounded">ADMIN</span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => onOpenTripSettings?.({ tripName: "Rajasthan Expedition", tripDates: "12 Oct – 20 Oct 2024", location: "Rajasthan, India", startDate: "Oct 12, 2024", endDate: "Oct 20, 2024", budget: "50000" })}
-                        className="p-2 rounded-lg text-gray-500 hover:bg-gray-100"
-                        aria-label="Edit trip"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                      </button>
-                      <button
-                        type="button"
-                        className="px-5 py-2.5 rounded-full bg-[#E8FBF4] text-[#0D9668] text-sm font-semibold shadow-sm hover:bg-[#D4F5E9] transition-colors"
-                        onClick={() => onViewTripDetails?.({ tripName: "Rajasthan Expedition", tripDates: "12 Oct – 20 Oct 2024", location: "Rajasthan, India" })}
-                      >
-                        View Details
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Trip Card 2 - Kerala (partial) */}
-              <div className="bg-white rounded-xl sm:rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                <div className="h-32 sm:h-40 bg-gray-100 flex items-center justify-center text-gray-400 text-sm">
-                  Map placeholder – Kerala / Munnar
-                </div>
-                <div className="p-4 sm:p-5">
-                  <h3 className="font-bold text-gray-800 text-base sm:text-lg mb-1">Kerala Getaway</h3>
-                  <p className="text-xs sm:text-sm text-gray-500 mb-3">Nov 1–Nov 8, 2024 • 3 Participants</p>
-                  <div className="flex items-center justify-between gap-3 sm:gap-4 flex-wrap">
-                    <div className="flex-1 min-w-0">
-                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden mb-1.5">
-                        <div className="h-full w-[40%] bg-[#14D38E] rounded-full" />
+                      <div className="p-4 sm:p-5">
+                        <h3 className="font-bold text-gray-800 text-base sm:text-lg mb-1">{trip.trip_name}</h3>
+                        <p className="text-xs sm:text-sm text-gray-500 mb-3">{startDate}–{endDate} • {membersCount} Participant{membersCount !== 1 ? 's' : ''}</p>
+                        <div className="flex items-center justify-between gap-3 sm:gap-4 flex-wrap">
+                          <div className="flex-1 min-w-0">
+                            <div className="h-2 bg-gray-100 rounded-full overflow-hidden mb-1.5">
+                              <div className="h-full w-[65%] bg-[#14D38E] rounded-full" />
+                            </div>
+                            <p className="text-xs text-gray-500">
+                              <span className="font-semibold text-gray-700">{membersCount} Members</span>
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {trip.members_id?.slice(0, 3).map((member, idx) => (
+                              <div key={idx} className="w-8 h-8 rounded-full bg-gray-300 border-2 border-white flex items-center justify-center text-xs font-bold text-gray-600">
+                                {member.user_full_name?.split(' ').map(n => n[0]).join('').slice(0, 2) || 'U'}
+                              </div>
+                            ))}
+                            {membersCount > 3 && (
+                              <span className="text-xs font-medium text-gray-500 ml-1">+{membersCount - 3}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
+                          {isAdmin && (
+                            <span className="text-xs font-bold text-[#0D9668] bg-[#E8FBF4] px-2 py-1 rounded">ADMIN</span>
+                          )}
+                          <div className={`flex items-center gap-2 ${isAdmin ? '' : 'ml-auto'}`}>
+                            <button
+                              type="button"
+                              onClick={() => onOpenTripSettings?.(trip)}
+                              className="p-2 rounded-lg text-gray-500 hover:bg-gray-100 cursor-pointer"
+                              aria-label="Edit trip"
+                            >
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                            </button>
+                            <button
+                              type="button"
+                              className="px-5 py-2.5 rounded-full bg-[#E8FBF4] text-[#0D9668] text-sm font-semibold shadow-sm hover:bg-[#D4F5E9] transition-colors cursor-pointer"
+                              onClick={() => onViewTripDetails?.({
+                                tripId: trip._id,
+                                tripName: trip.trip_name,
+                                tripDates: `${startDate} – ${endDate}`,
+                                location: trip.category || "",
+                              })}
+                            >
+                              View Details
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                      <p className="text-xs text-gray-500">
-                        Spent: <span className="font-semibold text-gray-700">₹20,000</span>
-                        <span className="ml-2">Budget: ₹50,000</span>
-                      </p>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <div className="w-8 h-8 rounded-full bg-gray-300 border-2 border-white" />
-                      <div className="w-8 h-8 rounded-full bg-gray-400 border-2 border-white" />
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
-                    <span className="text-xs font-bold text-[#0D9668] bg-[#E8FBF4] px-2 py-1 rounded">ADMIN</span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => onOpenTripSettings?.({ tripName: "Kerala Getaway", tripDates: "1 Nov – 8 Nov 2024", location: "Kerala, India", startDate: "Nov 1, 2024", endDate: "Nov 8, 2024", budget: "50000" })}
-                        className="p-2 rounded-lg text-gray-500 hover:bg-gray-100"
-                        aria-label="Edit trip"
-                      >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-                      </button>
-                      <button
-                        type="button"
-                        className="px-5 py-2.5 rounded-full bg-[#E8FBF4] text-[#0D9668] text-sm font-semibold shadow-sm hover:bg-[#D4F5E9] transition-colors"
-                        onClick={() => onViewTripDetails?.({ tripName: "Kerala Getaway", tripDates: "1 Nov – 8 Nov 2024", location: "Kerala, India" })}
-                      >
-                        View Details
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                  );
+                })}
               </div>
-            </div>
+            )}
           </div>
         </main>
       </div>
@@ -290,7 +342,7 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
         {/* Chat FAB */}
         <button
           type="button"
-          className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-white shadow-lg border border-gray-100 flex items-center justify-center text-[#14D38E] hover:bg-gray-50 transition-colors touch-manipulation"
+          className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-white shadow-lg border border-gray-100 flex items-center justify-center text-[#14D38E] hover:bg-gray-50 transition-colors touch-manipulation cursor-pointer"
           aria-label="Chat"
         >
           <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="currentColor" viewBox="0 0 24 24">
@@ -304,7 +356,7 @@ const Dashboard = ({ onSignOut, onViewTripDetails, onViewProfile, onOpenNotifica
         <button
           type="button"
           onClick={onOpenCreateTrip}
-          className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-[#14D38E] shadow-lg flex items-center justify-center text-white hover:bg-[#11B97C] transition-colors touch-manipulation"
+          className="w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-[#14D38E] shadow-lg flex items-center justify-center text-white hover:bg-[#11B97C] transition-colors touch-manipulation cursor-pointer"
           aria-label="Create New Trip"
         >
           <svg className="w-7 h-7 sm:w-8 sm:h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">

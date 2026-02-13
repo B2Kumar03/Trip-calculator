@@ -1,31 +1,139 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { useParams, useLocation } from "react-router-dom";
+import { io } from "socket.io-client";
+import { tripAPI, chatAPI, expenseAPI } from "../services/api";
+import { useApi } from "../hooks/useApi";
 
 const TripChat = ({
   onBack,
-  tripName = "Goa Trip 2024",
+  tripName,
   tripDates,
   location,
-  yourShare = "₹8,400",
-  groupBalance = "₹45,200",
+  yourShare,
+  groupBalance,
 }) => {
+  const { tripId } = useParams();
+  const locationState = useLocation();
   const [message, setMessage] = useState("");
+  const [members, setMembers] = useState([]);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [socket, setSocket] = useState(null);
+  const messagesEndRef = useRef(null);
+  const { execute, loading } = useApi();
 
-  const members = [
-    { name: "Rahul", role: "Admin", balance: "Owes ₹1,200", owes: true },
-    { name: "Priya", balance: "Owed ₹3,400", owed: true },
-    { name: "Amit", balance: "Owes ₹800", owes: true },
-  ];
+  useEffect(() => {
+    loadTripData();
+    return () => {
+      if (socket) {
+        socket.disconnect();
+      }
+    };
+  }, [tripId]);
 
-  const chatMessages = [
-    { type: "date", label: "YESTERDAY" },
-    { type: "message", author: "Rahul", color: "text-blue-600", isYou: false, text: "Hey guys, I've booked the villa for the first 3 days. It's right by Baga beach!" },
-    { type: "expense", author: "Rahul", amount: "₹12,400", description: "Villa Booking" },
-    { type: "message", author: "Priya", color: "text-pink-600", isYou: false, text: "Awesome! I'll handle the car rental and fuel for the whole trip." },
-    { type: "date", label: "TODAY" },
-    { type: "message", author: "You", isYou: true, text: "Sounds good! I'm just about to add the dinner expenses from last night. We went a bit over budget haha 😂", read: true },
-    { type: "expense", author: "You", amount: "₹3,200", description: "Dinner at Thalassa", isYou: true },
-    { type: "message", author: "Amit", color: "text-amber-700", isYou: false, text: "Has anyone checked the weather? Looks like it might rain on Sunday. Maybe we should swap the beach day for the fort trek?" },
-  ];
+  useEffect(() => {
+    scrollToBottom();
+  }, [chatMessages]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const loadTripData = async () => {
+    const id = tripId || locationState.state?.trip?.tripId;
+    if (!id) return;
+
+    // Load trip and members
+    await execute(
+      () => tripAPI.getById(id),
+      {
+        silent: true,
+        onSuccess: async (data) => {
+          const trip = data.data;
+          const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
+          const userId = currentUser._id || currentUser.id;
+          
+          const membersList = (trip.members_id || []).map(member => ({
+            id: member._id || member.id,
+            name: member.user_full_name || "Unknown",
+            role: trip.members_id[0]?._id === (member._id || member.id) ? "Admin" : null,
+            isYou: (member._id || member.id) === userId,
+          }));
+          setMembers(membersList);
+
+          // Load chat messages
+          try {
+            const chatRes = await chatAPI.getOrCreate(id);
+            const chatId = chatRes.data._id || chatRes.data.id;
+            const messagesRes = await chatAPI.getMessages(chatId);
+            const messages = (messagesRes.data || []).map(msg => ({
+              id: msg._id || msg.id,
+              type: "message",
+              author: msg.sender_id?.user_full_name || "Unknown",
+              authorId: msg.sender_id?._id || msg.sender_id?.id,
+              isYou: (msg.sender_id?._id || msg.sender_id?.id) === userId,
+              text: msg.message_text || "",
+              timestamp: msg.createdAt || msg.timestamp,
+            }));
+            setChatMessages(messages);
+          } catch (error) {
+            console.error("Error loading chat:", error);
+          }
+
+          // Connect to Socket.io
+          const socketUrl = import.meta.env.VITE_API_URL?.replace("/api", "") || "http://localhost:3000";
+          const newSocket = io(socketUrl, {
+            transports: ["websocket", "polling"],
+          });
+
+          newSocket.on("connect", () => {
+            console.log("Connected to chat server");
+            newSocket.emit("join_trip", { trip_id: id });
+          });
+
+          newSocket.on("new_message", (data) => {
+            const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
+            const userId = currentUser._id || currentUser.id;
+            setChatMessages(prev => [...prev, {
+              id: data.message_id,
+              type: "message",
+              author: data.sender_name || "Unknown",
+              authorId: data.sender_id,
+              isYou: data.sender_id === userId,
+              text: data.message_text || "",
+              timestamp: new Date(),
+            }]);
+          });
+
+          setSocket(newSocket);
+        },
+      }
+    );
+  };
+
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!message.trim() || !socket) return;
+
+    const id = tripId || locationState.state?.trip?.tripId;
+    if (!id) return;
+
+    try {
+      const chatRes = await chatAPI.getOrCreate(id);
+      const chatId = chatRes.data._id || chatRes.data.id;
+      const currentUser = JSON.parse(localStorage.getItem("user") || "{}");
+      
+      socket.emit("send_message", {
+        trip_id: id,
+        chat_id: chatId,
+        sender_id: currentUser._id || currentUser.id,
+        message_text: message.trim(),
+      });
+
+      setMessage("");
+    } catch (error) {
+      console.error("Error sending message:", error);
+    }
+  };
 
   const budgetItems = [
     { label: "Food & Drinks", percent: 75, color: "bg-orange-500" },
@@ -85,8 +193,10 @@ const TripChat = ({
           </svg>
         </button>
         <div className="flex-1 flex flex-col items-center justify-center min-w-0 mx-2">
-          <h1 className="font-semibold text-gray-800 truncate max-w-full text-sm sm:text-base">{tripName}</h1>
-          <p className="text-xs text-gray-500 truncate max-w-full">{participants}</p>
+          <h1 className="font-semibold text-gray-800 truncate max-w-full text-sm sm:text-base">{tripName || "Trip Chat"}</h1>
+          <p className="text-xs text-gray-500 truncate max-w-full">
+            {members.length > 0 ? `${members.length} member${members.length !== 1 ? "s" : ""}` : ""}
+          </p>
         </div>
         <div className="flex items-center gap-0 sm:gap-1">
           <span className="text-sm font-semibold text-gray-700 hidden sm:inline">Your Share {yourShare}</span>
@@ -166,60 +276,31 @@ const TripChat = ({
             <p className="text-xs sm:text-sm text-gray-500">{participants}</p>
           </div>
           <div className="flex-1 overflow-auto overflow-x-hidden p-3 sm:p-4 space-y-4 overscroll-contain">
-            {chatMessages.map((item, i) => {
-              if (item.type === "date") {
+            {chatMessages.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-gray-500">
+                <p>No messages yet. Start the conversation!</p>
+              </div>
+            ) : (
+              chatMessages.map((item) => {
                 return (
-                  <div key={i} className="flex justify-center">
-                    <span className="text-xs font-semibold text-gray-400 bg-gray-100 px-3 py-1 rounded-full">
-                      {item.label}
-                    </span>
-                  </div>
-                );
-              }
-              if (item.type === "expense") {
-                return (
-                  <div key={i} className={`flex ${item.isYou ? "justify-end" : "justify-start"}`}>
-                    <div className="max-w-[90%] sm:max-w-[85%] rounded-2xl bg-[#E8FBF4] border border-[#2ecc71]/30 px-3 py-2.5 sm:px-4 sm:py-3 flex items-center gap-2 sm:gap-3">
-                      <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-[#2ecc71] text-white flex items-center justify-center shrink-0">
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z" />
-                        </svg>
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-xs sm:text-sm font-semibold text-gray-800">
-                          {item.author} added {item.amount} for {item.description}.
-                        </p>
-                      </div>
+                  <div key={item.id || item.timestamp} className={`flex ${item.isYou ? "justify-end" : "justify-start"}`}>
+                    <div className={`max-w-[90%] sm:max-w-[85%] rounded-2xl px-3 py-2.5 sm:px-4 sm:py-3 ${
+                      item.isYou 
+                        ? "bg-[#2ecc71] text-white" 
+                        : "bg-gray-100 text-gray-800"
+                    }`}>
+                      <p className="text-sm sm:text-base break-words">{item.text}</p>
+                      <p className={`text-xs mt-1 ${
+                        item.isYou ? "text-white/70" : "text-gray-500"
+                      }`}>
+                        {item.author}
+                      </p>
                     </div>
                   </div>
                 );
-              }
-              return (
-                <div key={i} className={`flex ${item.isYou ? "justify-end" : "justify-start"}`}>
-                  <div className={`max-w-[90%] sm:max-w-[85%] ${item.isYou ? "order-2" : ""}`}>
-                    {!item.isYou && (
-                      <p className={`text-xs font-semibold mb-1 ml-1 ${item.color}`}>{item.author}</p>
-                    )}
-                    <div
-                      className={`rounded-2xl px-3 py-2 sm:px-4 sm:py-2.5 ${
-                        item.isYou
-                          ? "bg-[#2ecc71] text-white rounded-br-md"
-                          : "bg-gray-100 text-gray-800 rounded-bl-md"
-                      }`}
-                    >
-                      <p className="text-xs sm:text-sm">{item.text}</p>
-                      {item.isYou && item.read && (
-                        <div className="flex justify-end mt-1">
-                          <svg className="w-4 h-4 text-white/90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
-                          </svg>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+              })
+            )}
+            <div ref={messagesEndRef} />
           </div>
           <div className="p-2 sm:p-3 border-t border-gray-100 flex items-center gap-1.5 sm:gap-2 bg-white shrink-0 pb-[env(safe-area-inset-bottom,0)]">
             <button type="button" className="min-w-[40px] min-h-[40px] sm:min-w-[44px] sm:min-h-[44px] p-2 rounded-xl text-gray-500 hover:bg-gray-100 flex items-center justify-center touch-manipulation" aria-label="Emoji">
@@ -232,31 +313,25 @@ const TripChat = ({
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
               </svg>
             </button>
-            <input
-              type="text"
-              placeholder="Type a message..."
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              className="flex-1 min-w-0 py-2.5 px-3 sm:px-4 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#2ecc71]/30 focus:border-[#2ecc71] text-sm min-h-[40px] sm:min-h-[44px]"
-            />
-            <button
-              type="button"
-              className="min-h-[40px] sm:min-h-[44px] py-2.5 px-3 sm:px-4 rounded-xl bg-[#2ecc71] text-white font-medium text-sm flex items-center gap-1 sm:gap-1.5 hover:bg-[#27ae60] touch-manipulation shrink-0"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8v-8m-8 0v8" />
-              </svg>
-              <span className="hidden sm:inline">Add Expense</span>
-            </button>
-            <button
-              type="button"
-              className="min-w-[40px] min-h-[40px] sm:min-w-[44px] sm:min-h-[44px] p-2.5 rounded-xl bg-[#2ecc71] text-white hover:bg-[#27ae60] flex items-center justify-center touch-manipulation"
-              aria-label="Send"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-              </svg>
-            </button>
+            <form onSubmit={handleSendMessage} className="flex-1 flex items-center gap-1.5 sm:gap-2">
+              <input
+                type="text"
+                placeholder="Type a message..."
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                className="flex-1 min-w-0 py-2.5 px-3 sm:px-4 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#2ecc71]/30 focus:border-[#2ecc71] text-sm min-h-[40px] sm:min-h-[44px]"
+              />
+              <button
+                type="submit"
+                disabled={!message.trim() || loading}
+                className="min-w-[40px] min-h-[40px] sm:min-w-[44px] sm:min-h-[44px] p-2.5 rounded-xl bg-[#2ecc71] text-white hover:bg-[#27ae60] flex items-center justify-center touch-manipulation disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                aria-label="Send"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                </svg>
+              </button>
+            </form>
           </div>
         </main>
 
